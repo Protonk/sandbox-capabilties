@@ -94,11 +94,30 @@ Every specimen, regardless of language:
 - `probes/_runner.py` – shared Python helper for CLI parsing, JSON serialization, and exit codes.
 - `probes/_runner_c.{c,h}` – C helpers that mirror the same CLI/JSON contract.
 - `probes/_runner_r.R` – thin compatibility shim that sources `runtime/r/probe_runtime.R` so existing probes/tests stay untouched.
-- `runtime/r/` – canonical base‑R probe runtime; copy this directory (including `VERSION`) to vendor the same CLI/JSON contract elsewhere.
+- `runtime/r/` – canonical base‑R probe runtime; copy this directory (including the machine‑parsable `VERSION`) to vendor the same CLI/JSON contract elsewhere.
 - `probes/core/<domain>/` – hand‑maintained, canonical probes grouped by domain (`filesystem`, `process`, etc.).
 - `probes/fuzz/<domain>/<capability>/` – higher‑volume fuzz/AI‑generated specimens, organized to avoid path collisions.
 - `artifacts/` – JSON outputs, one file per probe ID (ignored by Git).
 - Documentation – see the “Documentation map” above for how README, `AGENTS.md`, and `probes/AGENTS.md` split responsibilities.
+
+### Vendoring the base-R runtime
+
+External projects (e.g., `RtoCodex`) can reuse the exact CLI/JSON contract by copying `runtime/r/` plus its `VERSION` file verbatim, then sourcing `probe_runtime.R`:
+
+```r
+source("runtime/r/probe_runtime.R")
+
+CAPABILITY <- "filesystem_tmp_write"
+args <- parse_args(CAPABILITY)
+result <- list(
+  capability = CAPABILITY,
+  status = "supported",
+  detail = sprintf("tmp dir writable (runtime %s)", RUNTIME_VERSION)
+)
+emit_result(result, args$output)
+```
+
+`runtime/r/VERSION` exposes a machine‑parsable semantic version (`0.1.0+<hash> (YYYY-MM-DD)`), while the in‑process `RUNTIME_VERSION` constant lets probes stamp the runtime build that produced a JSON artifact.
 
 ---
 

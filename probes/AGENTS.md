@@ -1,6 +1,6 @@
 # Probe Authoring Guide
 
-Use this directory to store every individual capability probe. Probes may be written in Python (import `_runner`), C (include `_runner_c.h`), or base R (source `_runner_r.R`); all runtimes provide the same CLI/JSON glue so authors can focus on the behavior under test. `_runner_r.R` is a shim over `runtime/r/probe_runtime.R`, and `runtime/r/` (plus `VERSION`) is the canonical vendorable runtime for other repos.
+Use this directory to store every individual capability probe. Probes may be written in Python (import `_runner`), C (include `_runner_c.h`), or base R (source `_runner_r.R`); all runtimes provide the same CLI/JSON glue so authors can focus on the behavior under test. `_runner_r.R` is a shim over `runtime/r/probe_runtime.R`, and `runtime/r/` (plus the machine-parsable `VERSION`) is the canonical vendorable runtime for other repos; `probe_runtime.R` exposes `RUNTIME_VERSION` if you want to stamp artifacts with the runtime build.
 
 ## Capability slugs vs specimens
 - **Capability slug** – the stable identifier for a behavior (`filesystem_tmp_write`, `process_basic_spawn`, ...). Every specimen that covers the same behavior must declare `CAPABILITY = "<slug>"` (or the equivalent constant in C/R).

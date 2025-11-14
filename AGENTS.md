@@ -7,12 +7,12 @@ Use this document as the operational playbook—commands, directory maps, and wo
 ## Layout
 - `Makefile` – recursively discovers every probe under `probes/`, derives a stable probe ID from the path (remove `probes/`, strip the extension, replace `/` with `__`), and emits `artifacts/<probe-id>.json`.
 - `probes/_runner.py`, `_runner_c.{c,h}`, `_runner_r.R` – shared helpers that keep the CLI/JSON contract identical across Python, C, and base R. `_runner_r.R` is now a thin shim that sources `runtime/r/probe_runtime.R`, so agents should continue to `source("probes/_runner_r.R")` inside this repo.
-- `runtime/r/` – vendorable base-R probe runtime plus a `VERSION` file. External harnesses can copy this directory and `source("probe_runtime.R")` to reuse the identical CLI/JSON contract.
+- `runtime/r/` – vendorable base-R probe runtime plus a machine-parsable `VERSION` file (`<semver>+<short-hash> (<date>)`). External harnesses can copy this directory, read the version marker, and `source("probe_runtime.R")` (which exposes `RUNTIME_VERSION`) to reuse the identical CLI/JSON contract.
 - `probes/core/<domain>/` – hand-maintained specimens for each capability slug (e.g., `filesystem/tmp_write.py`, `process/basic_spawn.py`).
 - `probes/fuzz/<domain>/<capability>/<NNNN>_<short_desc>.<ext>` – generated or fuzz-reduced specimens. The directory structure prevents collisions even when thousands of files accumulate.
 - `README.md`, `AGENTS.md`, and `probes/AGENTS.md` – living documentation for repo users and probe authors.
 
-When working inside this repo (including tests under `tests/r/`), always `source("probes/_runner_r.R")` so the shim can track future runtime updates. External projects (e.g., fuzz harnesses) may vendor `runtime/r/` plus `VERSION` verbatim and `source("probe_runtime.R")` to obtain the same CLI/JSON behavior.
+When working inside this repo (including tests under `tests/r/`), always `source("probes/_runner_r.R")` so the shim can track future runtime updates. External projects (e.g., fuzz harnesses) may vendor `runtime/r/` plus `VERSION` verbatim, read the semantic marker for auditing, and `source("probe_runtime.R")` to obtain the same CLI/JSON behavior (the `RUNTIME_VERSION` constant is available for stamping artifacts).
 
 ## Running the suite
 1. `make list` – discover every probe ID plus its source path.

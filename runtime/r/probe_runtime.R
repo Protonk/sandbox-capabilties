@@ -1,5 +1,9 @@
 # Vendable base-R probe runtime. Copy runtime/r/ (plus runtime/r/VERSION) to reuse
 # the same CLI/JSON contract; check runtime/r/VERSION to identify the snapshot.
+# RUNTIME_VERSION is exposed so probes may stamp the runtime version into their
+# emitted artifacts when needed.
+
+RUNTIME_VERSION <- "0.1.0"
 
 probe_id_fallback <- function(capability) {
   # Keep artifact names in sync with Makefile-discovered probe IDs; fall back to the

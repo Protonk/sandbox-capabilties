@@ -93,7 +93,8 @@ Every specimen, regardless of language:
 - `Makefile` – discovers probe files under `probes/`, derives probe IDs, and orchestrates execution and artifact creation.
 - `probes/_runner.py` – shared Python helper for CLI parsing, JSON serialization, and exit codes.
 - `probes/_runner_c.{c,h}` – C helpers that mirror the same CLI/JSON contract.
-- `probes/_runner_r.R` – base‑R helpers that do the same for R probes.
+- `probes/_runner_r.R` – thin compatibility shim that sources `runtime/r/probe_runtime.R` so existing probes/tests stay untouched.
+- `runtime/r/` – canonical base‑R probe runtime; copy this directory (including `VERSION`) to vendor the same CLI/JSON contract elsewhere.
 - `probes/core/<domain>/` – hand‑maintained, canonical probes grouped by domain (`filesystem`, `process`, etc.).
 - `probes/fuzz/<domain>/<capability>/` – higher‑volume fuzz/AI‑generated specimens, organized to avoid path collisions.
 - `artifacts/` – JSON outputs, one file per probe ID (ignored by Git).

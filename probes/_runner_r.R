@@ -1,5 +1,17 @@
+probe_id_fallback <- function(capability) {
+  # Keep artifact names in sync with Makefile-discovered probe IDs; fall back to the
+  # capability slug when running ad hoc outside of make.
+  probe_id <- Sys.getenv("PROBE_ID", unset = "")
+  if (nchar(probe_id) > 0) {
+    probe_id
+  } else {
+    capability
+  }
+}
+
 default_output <- function(capability) {
-  file.path("artifacts", paste0(capability, ".json"))
+  identifier <- probe_id_fallback(capability)
+  file.path("artifacts", paste0(identifier, ".json"))
 }
 
 parse_args <- function(capability, argv = commandArgs(trailingOnly = TRUE)) {
@@ -22,6 +34,7 @@ parse_args <- function(capability, argv = commandArgs(trailingOnly = TRUE)) {
 }
 
 json_escape <- function(value) {
+  # R does not ship a lightweight JSON writer; hand-roll escape rules we rely on.
   value <- gsub("\\\\", "\\\\\\\\", value, fixed = TRUE)
   value <- gsub("\"", "\\\\\"", value, fixed = TRUE)
   value <- gsub("\n", "\\\\n", value, fixed = TRUE)

@@ -8,6 +8,7 @@ import subprocess
 from _runner import ProbeResult, build_parser, emit_result
 
 CAPABILITY = "process_basic_spawn"
+# /bin/echo exists even in minimal POSIX environments, making it a reliable smoke test.
 COMMAND = ["/bin/echo", "capability-probe"]
 
 

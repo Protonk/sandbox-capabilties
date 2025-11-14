@@ -1,9 +1,11 @@
 source(file.path("probes", "_runner_r.R"))
 
 CAPABILITY <- "r_runner_cli_test"
+probe_id <- "r_runner_cli_test_specimen"
+Sys.setenv(PROBE_ID = probe_id)
 
 args <- parse_args(CAPABILITY, character(0))
-expected <- file.path("artifacts", paste0(CAPABILITY, ".json"))
+expected <- file.path("artifacts", paste0(probe_id, ".json"))
 if (!identical(args$output, expected)) {
   stop(sprintf("Expected default output '%s' but saw '%s'", expected, args$output), call. = FALSE)
 }

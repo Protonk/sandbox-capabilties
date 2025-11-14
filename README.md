@@ -1,6 +1,6 @@
 # Capability Probes: A Sandbox-Aware Test Harness
 
-This repository turns sandbox quirks into **explicit, repeatable signals**. Every capability you care about is represented by a focused probe under `probes/`, and the shared `Makefile` orchestrates discovery, execution, and artifact collection. The outcome is a machine-readable catalog of "what this environment can and cannot do" that downstream tools can trust.
+This repository turns sandbox quirks into **explicit, repeatable signals**. Every capability you care about is represented by focused probes under `probes/core/` or `probes/fuzz/`, and the shared `Makefile` orchestrates discovery, execution, and artifact collection. The outcome is a machine-readable catalog of "what this environment can and cannot do" that downstream tools can trust.
 
 ---
 
@@ -11,23 +11,23 @@ This repository turns sandbox quirks into **explicit, repeatable signals**. Ever
    - `supported`
    - `blocked_expected`
    - `blocked_unexpected`
-3. **Persist** the classification as a JSON artifact (one file per capability) so other workflows can consume it deterministically.
+3. **Persist** the classification as a JSON artifact (one file per probe specimen) so other workflows can consume it deterministically.
 
-The philosophy described above shows up concretely via `make` targets, helper utilities, and example probes. Everything is designed so that adding the next capability is trivial.
+The philosophy described above shows up concretely via `make` targets, helper utilities, and example probes. Everything is designed so that adding the next capability is trivial, even when AI or fuzzers generate dozens of variants.
 
 ---
 
 ## Quick start
 
 ```sh
-# enumerate every probe discovered under probes/*.py, probes/*.c, and probes/*.R
+# enumerate every probe discovered under probes/core/** and probes/fuzz/**
 make list
 
-# run every probe and populate artifacts/<capability>.json
+# run every probe and populate artifacts/<probe-id>.json
 make probes
 
-# iterate on a single capability
-make run PROBE=filesystem_tmp_write
+# iterate on a single specimen (identified by probe ID)
+make run PROBE=core__filesystem__tmp_write
 ```
 
 `make probes` exits non-zero if any probe reports `blocked_unexpected`, making it ideal for CI jobs that need to fail fast when the sandbox changes.
@@ -37,56 +37,91 @@ Typical run (truncated):
 ```
 $ make probes
 mkdir -p artifacts
-[probe] filesystem_root_write
-python3 probes/filesystem_root_write.py --output artifacts/filesystem_root_write.json
-[probe] filesystem_tmp_write
-python3 probes/filesystem_tmp_write.py --output artifacts/filesystem_tmp_write.json
-[probe] filesystem_tmp_write_c
-cc -std=c11 -Wall -Wextra -Iprobes -o artifacts/.c_probes/filesystem_tmp_write_c probes/filesystem_tmp_write_c.c probes/_runner_c.c
-artifacts/.c_probes/filesystem_tmp_write_c --output artifacts/filesystem_tmp_write_c.json
-[probe] filesystem_tmp_write_r
-Rscript probes/filesystem_tmp_write_r.R --output artifacts/filesystem_tmp_write_r.json
-[probe] process_basic_spawn
-python3 probes/process_basic_spawn.py --output artifacts/process_basic_spawn.json
+[probe] core__filesystem__root_write
+PYTHONPATH=probes: python3 probes/core/filesystem/root_write.py --output artifacts/core__filesystem__root_write.json
+[probe] core__filesystem__tmp_write
+PYTHONPATH=probes: python3 probes/core/filesystem/tmp_write.py --output artifacts/core__filesystem__tmp_write.json
+[probe] core__filesystem__tmp_write_native
+cc -std=c11 -Wall -Wextra -Iprobes -o artifacts/.c_probes/core__filesystem__tmp_write_native probes/core/filesystem/tmp_write_native.c probes/_runner_c.c
+artifacts/.c_probes/core__filesystem__tmp_write_native --output artifacts/core__filesystem__tmp_write_native.json
+[probe] core__filesystem__tmp_write_r
+Rscript probes/core/filesystem/tmp_write_r.R --output artifacts/core__filesystem__tmp_write_r.json
+[probe] core__process__basic_spawn
+PYTHONPATH=probes: python3 probes/core/process/basic_spawn.py --output artifacts/core__process__basic_spawn.json
+[probe] fuzz__filesystem__tmp_write__0001_repeated_open
+PYTHONPATH=probes: python3 probes/fuzz/filesystem/tmp_write/0001_repeated_open.py --output artifacts/fuzz__filesystem__tmp_write__0001_repeated_open.json
 ```
 
 Every probe—no matter the implementation language—obeys the same CLI contract by accepting `--output <path>` and emitting identical JSON artifacts. Python probes use the shared helpers in `_runner.py`, native probes link against `_runner_c.{c,h}`, and R probes source `_runner_r.R` to share the same parser and JSON writer.
+The harness also exports `PROBE_ID=<probe-id>` when launching a specimen so the helpers can derive the correct default artifact path. When running a probe manually, either keep that environment variable or pass `--output` explicitly.
 
 ---
 
 ## Repository map
 
-- `Makefile` – auto-discovers every `probes/*.py`, `probes/*.c`, and `probes/*.R` that don’t start with `_`, then dispatches to the right toolchain. Key fragment:
+- `Makefile` – recursively discovers every probe under `probes/`, derives a unique artifact ID from the file path, and dispatches to the right toolchain. Key fragment:
 
   ```make
-  PYTHON_PROBE_SCRIPTS := $(filter-out probes/_%.py,$(wildcard probes/*.py))
-  C_PROBE_SOURCES := $(filter-out probes/_%.c,$(wildcard probes/*.c))
-  R_PROBE_SCRIPTS := $(filter-out probes/_%.R,$(wildcard probes/*.R))
+  PYTHON_PROBE_SOURCES := $(shell find probes -type f -name '*.py' ! -name '_*.py' | sort)
 
-  $(PYTHON_ARTIFACTS): $(ARTIFACT_DIR)/%.json: probes/%.py | $(ARTIFACT_DIR)
-  	$(PYTHON) $< --output $@
+  define probe_id
+  $(subst /,__,$(basename $(patsubst probes/%,%,$1)))
+  endef
 
-  $(C_PROBE_BINARIES): $(C_BUILD_DIR)/%: probes/%.c probes/_runner_c.c probes/_runner_c.h | $(C_BUILD_DIR)
-  	$(CC) $(CFLAGS) -Iprobes -o $@ $< probes/_runner_c.c
+  define artifact_path
+  $(ARTIFACT_DIR)/$(call probe_id,$1).json
+  endef
 
-  $(R_ARTIFACTS): $(ARTIFACT_DIR)/%.json: probes/%.R | $(ARTIFACT_DIR)
-	$(RSCRIPT) $< --output $@
+  $(foreach src,$(PYTHON_PROBE_SOURCES),$(eval $(call PYTHON_PROBE_RULE,$(src))))
   ```
 
 - `probes/_runner.py` – shared glue that handles CLI parsing, JSON serialization, artifact directories, and exit codes. Individual probes just import `build_parser`, `ProbeResult`, and `emit_result`.
 - `probes/_runner_c.{c,h}` – native runtime helpers that expose the same CLI contract and artifact writer to C probes (and their unit tests).
 - `probes/_runner_r.R` – base-R helpers that mirror the CLI/JSON contract so R probes stay tiny while integrating with the rest of the harness.
-- `probes/*.py` / `probes/*.c` / `probes/*.R` – capability probes written in whichever language best exercises the behavior.
-- `artifacts/` – output directory (ignored via `.gitignore`) where every probe writes `<capability>.json`.
+- `probes/core/<domain>/` – hand-curated probes organized by capability domain (`filesystem`, `process`, etc.).
+- `probes/fuzz/<domain>/<capability>/` – AI/fuzzer-generated specimens organized by domain, capability, and probe number.
+- `artifacts/` – output directory (ignored via `.gitignore`) where every probe writes `<probe-id>.json`.
 - `AGENTS.md` and `probes/AGENTS.md` – short guides tailored to repo users and probe authors respectively.
+
+---
+
+## Capability slugs, specimens, and IDs
+
+- A **capability slug** (e.g., `filesystem_tmp_write`, `process_basic_spawn`) is the human-readable identifier for a behavior. It is declared inside every probe via `CAPABILITY = "<slug>"` (or the equivalent constant in C/R) and remains stable even if multiple specimens exist.
+- A **probe specimen** is a concrete implementation of a capability probe (e.g., Python vs C vs R, or different fuzz-minimized variants). Multiple specimens may report the same capability slug.
+- Each specimen lives at a unique path such as `probes/core/filesystem/tmp_write.py` or `probes/fuzz/filesystem/tmp_write/0001_short_stacktrace.py`.
+- The Makefile deterministically converts that path into a **probe ID** by:
+  1. Stripping the `probes/` prefix.
+  2. Removing the file extension.
+  3. Replacing `/` with `__`.
+
+  Examples:
+
+  | Probe path | Probe ID | Artifact |
+  | --- | --- | --- |
+  | `probes/core/filesystem/tmp_write.py` | `core__filesystem__tmp_write` | `artifacts/core__filesystem__tmp_write.json` |
+  | `probes/fuzz/filesystem/tmp_write/0001_repeated_open.py` | `fuzz__filesystem__tmp_write__0001_repeated_open` | `artifacts/fuzz__filesystem__tmp_write__0001_repeated_open.json` |
+
+The probe ID is what you pass to `make run PROBE=<id>` and what downstream tooling uses to join capability artifacts.
+
+---
+
+## Directory layout: core vs fuzz
+
+The `probes/` tree separates hand-maintained probes from high-volume generated ones:
+
+- `probes/core/<domain>/<file>` – canonical, human-reviewed probes. Domains are broad areas like `filesystem`, `process`, `network`, or `time`. Filenames should be short and descriptive (`tmp_write.py`, `root_write.py`, `basic_spawn.py`). If multiple languages exist for the same capability, encode the nuance in the filename (`tmp_write_native.c`, `tmp_write_r.R`) while keeping `CAPABILITY = "filesystem_tmp_write"` across all of them.
+- `probes/fuzz/<domain>/<capability>/<NNNN>_<short_desc>.<ext>` – fuzz-discovered or AI-generated probes. The `<domain>` matches the same high-level buckets as core probes, `<capability>` mirrors the slug, `<NNNN>` is a zero-padded integer (`0001`, `0002`, ...), and `<short_desc>` is a brief kebab/underscore summary of what the specimen does or why it exists.
+
+This shallow layout keeps the repository understandable for humans while providing enough structure for automation to add thousands of specimens without collisions.
 
 ---
 
 ## Probe anatomy
 
-All probes follow the same structure: declare a capability slug, implement a tiny `exercise()`/`exercise` function that performs a single operation, classify the result, and emit it through the shared helper for that language.
+All probes follow the same structure: declare a capability slug, implement a tiny `exercise()` function that performs a single operation, classify the result, and emit it through the shared helper for that language.
 
-- **Python probe** – import `_runner`, build the CLI parser, and emit a `ProbeResult`. `probes/filesystem_tmp_write.py` tests whether the system temporary directory is writable:
+- **Python probe** – `probes/core/filesystem/tmp_write.py` tests whether the system temporary directory is writable:
 
   ```python
   CAPABILITY = "filesystem_tmp_write"
@@ -105,99 +140,45 @@ All probes follow the same structure: declare a capability slug, implement a tin
           return "blocked_unexpected", f"OS error while writing to '{tmp_dir}': {exc}"
   ```
 
-- **C probe** – include `_runner_c.h`, use `probe_cli_*` helpers to honor the CLI contract, and call `emit_result`. `probes/filesystem_tmp_write_c.c` exercises the same behavior from native code:
+- **C probe** – `probes/core/filesystem/tmp_write_native.c` performs the same capability via native syscalls and still reports `CAPABILITY = "filesystem_tmp_write"`.
+- **R probe** – `probes/core/filesystem/tmp_write_r.R` exercises the same slug via base R.
 
-  ```c
-  static const char *CAPABILITY = "filesystem_tmp_write_c";
+Every specimen parses `--output`, writes JSON through the helper runtime, and returns `0` only when the status is `supported` or `blocked_expected`.
 
-  static struct probe_result exercise(void) {
-      static char detail[512];
-      const char *tmp_dir = getenv("TMPDIR");
-      if (tmp_dir == NULL || tmp_dir[0] == '\0') {
-          tmp_dir = "/tmp";
-      }
-      char file_path[PATH_MAX];
-      snprintf(file_path, sizeof(file_path), "%s/%s.txt", tmp_dir, CAPABILITY);
-      int fd = open(file_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-      if (fd == -1) {
-          snprintf(detail, sizeof(detail), "Unable to write '%s': %s", file_path, strerror(errno));
-          return (struct probe_result){CAPABILITY, "blocked_unexpected", detail};
-      }
-      /* ...write payload, unlink file... */
-      snprintf(detail, sizeof(detail), "Temporary directory '%s' is writable via native code", tmp_dir);
-      return (struct probe_result){CAPABILITY, "supported", detail};
-  }
-  ```
+---
 
-- **R probe** – source `_runner_r.R`, parse CLI arguments with `parse_args()`, and emit JSON with `emit_result()`. `probes/filesystem_tmp_write_r.R` mirrors the temporary-directory check:
+## Adding a fuzz specimen
 
-  ```r
-  source(file.path("probes", "_runner_r.R"))
-  CAPABILITY <- "filesystem_tmp_write_r"
+Automated agents and fuzzers follow the same recipe when contributing new specimens:
 
-  exercise <- function() {
-    tmp_dir <- tempdir()
-    file_path <- file.path(tmp_dir, sprintf("%s_%d.txt", CAPABILITY, as.integer(Sys.time())))
-    tryCatch({
-      writeLines("sandbox capability probe (r)", file_path, useBytes = TRUE)
-      file.remove(file_path)
-      list(status = "supported", detail = sprintf("Temporary directory '%s' is writable via R", tmp_dir))
-    }, error = function(err) {
-      list(status = "blocked_unexpected", detail = conditionMessage(err))
-    })
-  }
-  ```
+1. **Identify the capability slug** (`filesystem_tmp_write`, `process_basic_spawn`, etc.). All specimens must declare the same `CAPABILITY` string so downstream tools can correlate results.
+2. **Map the slug to a domain.** Use the existing `probes/core/` layout as inspiration (`filesystem`, `process`, `network`, `time`, `misc`, ...).
+3. **Create or reuse the directory** `probes/fuzz/<domain>/<capability>/`.
+4. **Allocate the next specimen number.** List existing files, find the highest `NNNN` prefix, and pick `NNNN+1` (zero padded to four digits).
+5. **Pick a short description** for the filename (`0003_misaligned_fd.py`, `0004_drop_privs.c`, ...). Keep it kebab or underscore separated.
+6. **Implement the probe** in your language of choice, sourcing the appropriate `_runner` helper and declaring `CAPABILITY = "<slug>"`.
+7. **Run it.** `make run PROBE=fuzz__<domain>__<capability>__<NNNN_short_desc>` automatically compiles/interprets the specimen, exports `PROBE_ID=<probe-id>`, and places the artifact at `artifacts/<probe-id>.json`.
+8. **Document interesting behaviors** inside the probe or accompanying commit message if the fuzz discovery needs additional context.
 
-Built-in probes:
-- `filesystem_root_write` – ensures privileged paths (such as `/var/root`) reject writes in sandboxes, which is treated as `blocked_expected`.
-- `filesystem_tmp_write` – Python version of the temporary-directory write check.
-- `filesystem_tmp_write_c` – the same capability executed via compiled C for environments that only authorize native binaries.
-- `filesystem_tmp_write_r` – the same capability executed via base R for sandboxes that prefer interpreter-based tooling.
-- `process_basic_spawn` – verifies `/bin/echo` can be spawned successfully, producing `supported` when child processes are allowed.
+Because artifact names are derived from the path, there is no risk of overwriting an existing result and no registry to update manually.
 
-Use these examples as templates when authoring new capabilities—pick whichever language exposes the behavior most directly, but keep the probe itself tiny and deterministic.
+---
+
+## Consuming capability results
+
+Artifacts are intentionally simple (one JSON per probe ID) so downstream tooling can:
+- Parse the directory and index statuses.
+- Assert preconditions before kicking off expensive tests.
+- Surface regressions whenever a status flips from `supported` → `blocked_expected` (or vice versa).
+
+Build higher-level scripts that read `artifacts/*.json`, join with the capability catalog, or push the results elsewhere. Keep the probes tiny and deterministic; put richer logic in the layers that **consume** these artifacts.
 
 ---
 
 ## Tests
 
-```sh
-make test
-```
-
-This runs the Python `unittest` suite (discovered under `tests/test_*.py`), any native smoke tests stored under `tests/c/*.c`, and base-R scripts under `tests/r/*.R`. Add Python tests whenever you touch `_runner.py` or the Makefile wiring, add C tests whenever you extend `_runner_c` or other native helpers, and add R tests when updating `_runner_r` or the R-specific build plumbing so regressions across languages are caught early.
-
----
-
-## Artifact format
-
-Every probe writes `artifacts/<capability>.json` with a stable schema:
-
-```json
-{
-  "capability": "filesystem_tmp_write",
-  "status": "supported",
-  "detail": "Temporary directory '/var/folders/.../T' is writable"
-}
-```
-
-- `capability` matches the filename/slug.
-- `status` governs the exit code (`supported`/`blocked_expected` ⇒ success, `blocked_unexpected` ⇒ failure).
-- `detail` contains human-readable context for logs or dashboards.
-
-Because artifacts are standalone files, downstream tooling can diff directories between runs, ingest them into dashboards, or gate higher-level tests by checking for required capabilities.
-
----
-
-## Adding a capability
-
-1. Observe an environment behavior worth tracking.
-2. Choose a short slug (snake_case) and the language that best fits the behavior. Create `probes/<slug>.py` (importing `_runner`), `probes/<slug>.c` (including `_runner_c.h`), or `probes/<slug>.R` (sourcing `_runner_r.R`).
-3. Keep the probe laser-focused on one operation and explain the rationale in the `detail` string so downstream tools surface a helpful message.
-4. Run `make run PROBE=<slug>` until it behaves as expected. Then run `make probes` to ensure the whole suite still passes.
-5. Commit the new probe along with any documentation updates referencing the capability and language.
-
-If you plan to consume the new capability elsewhere, teach those scripts/tests to read the JSON artifacts rather than duplicating detection logic. This preserves the single source of truth for environment behavior.
+- Run `make test` before and after meaningful changes to ensure the Python, C, and R helpers remain stable. The target runs `unittest`, compiles `tests/c/*.c`, and executes each `tests/r/*.R`.
+- Python tests live under `tests/` as `test_*.py` files that subclass `unittest.TestCase`. Native smoke tests live under `tests/c/` and should link against `_runner_c.c`, while base-R smoke tests live under `tests/r/` and source `_runner_r.R`.
 
 ---
 

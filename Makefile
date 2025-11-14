@@ -7,20 +7,45 @@ ARTIFACT_DIR := artifacts
 C_BUILD_DIR := $(ARTIFACT_DIR)/.c_probes
 C_TEST_BIN_DIR := $(ARTIFACT_DIR)/.c_tests
 
-PYTHON_PROBE_SCRIPTS := $(filter-out probes/_%.py,$(wildcard probes/*.py))
-PYTHON_PROBES := $(basename $(notdir $(PYTHON_PROBE_SCRIPTS)))
-PYTHON_ARTIFACTS := $(addprefix $(ARTIFACT_DIR)/,$(addsuffix .json,$(PYTHON_PROBES)))
+# Recursively discover every specimen so the harness auto-scales as files are added
+# beneath probes/core/** or probes/fuzz/**. Helpers and runners keep their `_` prefix
+# to stay hidden from find.
+PYTHON_PROBE_SOURCES := $(shell find probes -type f -name '*.py' ! -name '_*.py' | sort)
+C_PROBE_SOURCES := $(shell find probes -type f -name '*.c' ! -name '_*.c' | sort)
+R_PROBE_SOURCES := $(shell find probes -type f -name '*.R' ! -name '_*.R' | sort)
 
-C_PROBE_SOURCES := $(filter-out probes/_%.c,$(wildcard probes/*.c))
-C_PROBES := $(basename $(notdir $(C_PROBE_SOURCES)))
-C_ARTIFACTS := $(addprefix $(ARTIFACT_DIR)/,$(addsuffix .json,$(C_PROBES)))
-C_PROBE_BINARIES := $(addprefix $(C_BUILD_DIR)/,$(C_PROBES))
+# Convert an absolute probe path into a probes-relative fragment for display.
+define probe_rel
+$(patsubst probes/%,%,$1)
+endef
 
-R_PROBE_SCRIPTS := $(filter-out probes/_%.R,$(wildcard probes/*.R))
-R_PROBES := $(basename $(notdir $(R_PROBE_SCRIPTS)))
-R_ARTIFACTS := $(addprefix $(ARTIFACT_DIR)/,$(addsuffix .json,$(R_PROBES)))
+# Flatten the path (swap / -> __) so every specimen produces a unique ID + artifact.
+define probe_id
+$(subst /,__,$(basename $(call probe_rel,$1)))
+endef
 
-PROBES := $(sort $(PYTHON_PROBES) $(C_PROBES) $(R_PROBES))
+# Map a specimen path to its JSON artifact path.
+define artifact_path
+$(ARTIFACT_DIR)/$(call probe_id,$1).json
+endef
+
+# Local build directory for compiled C probes so source directories stay clean.
+define c_binary_path
+$(C_BUILD_DIR)/$(call probe_id,$1)
+endef
+
+PYTHON_ARTIFACTS := $(foreach src,$(PYTHON_PROBE_SOURCES),$(call artifact_path,$(src)))
+C_ARTIFACTS := $(foreach src,$(C_PROBE_SOURCES),$(call artifact_path,$(src)))
+R_ARTIFACTS := $(foreach src,$(R_PROBE_SOURCES),$(call artifact_path,$(src)))
+ALL_ARTIFACTS := $(sort $(PYTHON_ARTIFACTS) $(C_ARTIFACTS) $(R_ARTIFACTS))
+
+PROBE_IDS := $(sort $(foreach src,$(PYTHON_PROBE_SOURCES) $(C_PROBE_SOURCES) $(R_PROBE_SOURCES),$(call probe_id,$(src))))
+
+PROBE_INDEX := $(foreach src,$(PYTHON_PROBE_SOURCES),$(call probe_id,$(src))@@@python@@@$(call probe_rel,$(src))) \
+	$(foreach src,$(C_PROBE_SOURCES),$(call probe_id,$(src))@@@c@@@$(call probe_rel,$(src))) \
+	$(foreach src,$(R_PROBE_SOURCES),$(call probe_id,$(src))@@@r@@@$(call probe_rel,$(src)))
+
+PROBES := $(PROBE_IDS)
 
 C_TEST_SOURCES := $(wildcard tests/c/*.c)
 R_TEST_SCRIPTS := $(wildcard tests/r/*.R)
@@ -29,7 +54,7 @@ R_TEST_SCRIPTS := $(wildcard tests/r/*.R)
 
 all: probes
 
-probes: $(PYTHON_ARTIFACTS) $(C_ARTIFACTS) $(R_ARTIFACTS)
+probes: $(ALL_ARTIFACTS)
 
 $(ARTIFACT_DIR):
 	mkdir -p $@
@@ -40,41 +65,51 @@ $(C_BUILD_DIR):
 $(C_TEST_BIN_DIR):
 	mkdir -p $@
 
-$(PYTHON_ARTIFACTS): $(ARTIFACT_DIR)/%.json: probes/%.py | $(ARTIFACT_DIR)
-	@echo "[probe] $*"
-	$(PYTHON) $< --output $@
+define PYTHON_PROBE_RULE
+$(call artifact_path,$1): $1 | $(ARTIFACT_DIR)
+	@echo "[probe] $(call probe_id,$1)"
+	# Export PROBE_ID so the shared runner emits artifacts to the ID-matched path even
+	# when the script relies on its default `--output`.
+	PROBE_ID=$(call probe_id,$1) PYTHONPATH=probes:$${PYTHONPATH} $(PYTHON) $1 --output $$@
+endef
 
-$(C_PROBE_BINARIES): $(C_BUILD_DIR)/%: probes/%.c probes/_runner_c.c probes/_runner_c.h | $(C_BUILD_DIR)
-	$(CC) $(CFLAGS) -Iprobes -o $@ $< probes/_runner_c.c
+define C_PROBE_RULE
+$(call c_binary_path,$1): $1 probes/_runner_c.c probes/_runner_c.h | $(C_BUILD_DIR)
+	$(CC) $(CFLAGS) -Iprobes -o $$@ $1 probes/_runner_c.c
+$(call artifact_path,$1): $(call c_binary_path,$1) | $(ARTIFACT_DIR)
+	@echo "[probe] $(call probe_id,$1)"
+	# Native probes read PROBE_ID through probe_cli_init so their default artifact path
+	# matches the Make-derived ID instead of the capability slug.
+	PROBE_ID=$(call probe_id,$1) $(call c_binary_path,$1) --output $$@
+endef
 
-$(C_ARTIFACTS): $(ARTIFACT_DIR)/%.json: $(C_BUILD_DIR)/% | $(ARTIFACT_DIR)
-	@echo "[probe] $*"
-	$< --output $@
+define R_PROBE_RULE
+$(call artifact_path,$1): $1 | $(ARTIFACT_DIR)
+	@echo "[probe] $(call probe_id,$1)"
+	# R helpers mirror the same PROBE_ID behavior; note that Rscript inherits env vars.
+	PROBE_ID=$(call probe_id,$1) $(RSCRIPT) $1 --output $$@
+endef
 
-$(R_ARTIFACTS): $(ARTIFACT_DIR)/%.json: probes/%.R | $(ARTIFACT_DIR)
-	@echo "[probe] $*"
-	$(RSCRIPT) $< --output $@
+PYTHON_RULE_EVAL := $(foreach src,$(PYTHON_PROBE_SOURCES),$(eval $(call PYTHON_PROBE_RULE,$(src))))
+C_RULE_EVAL := $(foreach src,$(C_PROBE_SOURCES),$(eval $(call C_PROBE_RULE,$(src))))
+R_RULE_EVAL := $(foreach src,$(R_PROBE_SOURCES),$(eval $(call R_PROBE_RULE,$(src))))
 
 $(PROBES): %: $(ARTIFACT_DIR)/%.json
 	@echo "wrote $<"
 
 list:
-	@echo "Available probes:" && for name in $(PROBES); do \
-		if [ -f "probes/$$name.py" ]; then \
-			lang="python"; \
-		elif [ -f "probes/$$name.c" ]; then \
-			lang="c"; \
-		elif [ -f "probes/$$name.R" ]; then \
-			lang="r"; \
-		else \
-			lang="unknown"; \
-		fi; \
-		echo "  - $$name ($$lang)"; \
+	@echo "Available probes:" && \
+	for entry in $(PROBE_INDEX); do \
+		id=$${entry%%@@@*}; \
+		rest=$${entry#*@@@}; \
+		lang=$${rest%%@@@*}; \
+		path=$${rest#*@@@}; \
+		echo "  - $$id ($$lang) <- probes/$$path"; \
 	done
 
 run:
 	@test -n "$(PROBE)" || (echo "Usage: make run PROBE=<name>" >&2 && exit 1)
-	@if [ ! -f "probes/$(PROBE).py" ] && [ ! -f "probes/$(PROBE).c" ] && [ ! -f "probes/$(PROBE).R" ]; then \
+	@if ! echo " $(PROBE_IDS) " | grep -q " $(PROBE) "; then \
 		echo "Unknown probe '$(PROBE)'" >&2; \
 		exit 1; \
 	fi

@@ -14,6 +14,7 @@ CAPABILITY = "filesystem_tmp_write"
 
 def exercise() -> tuple[str, str]:
     tmp_dir = Path(tempfile.gettempdir())
+    # Use a timestamped filename so concurrent probe executions do not collide.
     probe_file = tmp_dir / f"capability_probe_{int(time.time() * 1000)}.txt"
 
     try:
@@ -30,6 +31,7 @@ def main() -> None:
     parser = build_parser(CAPABILITY)
     args = parser.parse_args()
     status, detail = exercise()
+    # All specimens report the same capability slug even when they use different languages.
     result = ProbeResult(capability=CAPABILITY, status=status, detail=detail)
     emit_result(result, args.output)
 

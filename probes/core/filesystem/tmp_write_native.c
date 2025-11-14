@@ -14,17 +14,19 @@
 #define PATH_MAX 4096
 #endif
 
-static const char *CAPABILITY = "filesystem_tmp_write_c";
+static const char *CAPABILITY = "filesystem_tmp_write";
 
 static struct probe_result exercise(void) {
     static char detail[512];
 
     const char *tmp_dir = getenv("TMPDIR");
     if (tmp_dir == NULL || tmp_dir[0] == '\0') {
+        // Match Python tmp_write semantics by falling back to /tmp when TMPDIR is unset.
         tmp_dir = "/tmp";
     }
 
     char file_path[PATH_MAX];
+    // Timestamp-based suffix ensures the probe never tramples a concurrent run.
     snprintf(file_path, sizeof(file_path), "%s/%s_%ld.txt", tmp_dir, CAPABILITY, (long)time(NULL));
 
     int fd = open(file_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
@@ -44,6 +46,7 @@ static struct probe_result exercise(void) {
         return (struct probe_result){CAPABILITY, "blocked_unexpected", detail};
     }
 
+    // Clean up aggressively; a failed unlink is non-fatal but keeps the directory tidy.
     unlink(file_path);
     snprintf(detail, sizeof(detail), "Temporary directory '%s' is writable via native code", tmp_dir);
     return (struct probe_result){CAPABILITY, "supported", detail};

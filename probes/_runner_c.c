@@ -20,6 +20,7 @@ static bool status_is_success(const char *status) {
 }
 
 static int ensure_parent_dirs(const char *path) {
+    // Simple mkdir -p equivalent so probes can emit artifacts into nested dirs.
     char buffer[PATH_MAX];
     size_t length = strnlen(path, sizeof(buffer) - 1);
     if (length == 0) {
@@ -52,6 +53,7 @@ static void json_escape(FILE *fp, const char *text) {
     if (text == NULL) {
         return;
     }
+    // Avoid pulling in a JSON library—escaping a few characters keeps the helper tiny.
     const unsigned char *cursor = (const unsigned char *)text;
     for (; *cursor != '\0'; ++cursor) {
         unsigned char ch = *cursor;
@@ -86,9 +88,13 @@ int probe_cli_init(struct probe_cli *cli, const char *capability) {
     if (cli == NULL || capability == NULL) {
         return -1;
     }
-    int written = snprintf(cli->output_path, sizeof(cli->output_path), "artifacts/%s.json", capability);
+    // Makefile exports PROBE_ID so compiled probes emit JSON to the path-derived ID
+    // instead of the bare capability slug; fall back to the slug when invoked manually.
+    const char *probe_id = getenv("PROBE_ID");
+    const char *identifier = (probe_id != NULL && probe_id[0] != '\0') ? probe_id : capability;
+    int written = snprintf(cli->output_path, sizeof(cli->output_path), "artifacts/%s.json", identifier);
     if (written < 0 || (size_t)written >= sizeof(cli->output_path)) {
-        fprintf(stderr, "Capability name '%s' is too long for an artifact path\n", capability);
+        fprintf(stderr, "Identifier '%s' is too long for an artifact path\n", identifier);
         return -1;
     }
     return 0;

@@ -1,12 +1,19 @@
 #include "_runner_c.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
 static const char *CAPABILITY = "c_runner_cli_test";
 
 int main(void) {
+    const char *probe_id = "c_runner_cli_test_specimen";
+    if (setenv("PROBE_ID", probe_id, 1) != 0) {
+        fprintf(stderr, "Failed to set PROBE_ID\n");
+        return 1;
+    }
+
     struct probe_cli cli;
     if (probe_cli_init(&cli, CAPABILITY) != 0) {
         fprintf(stderr, "probe_cli_init failed\n");
@@ -20,7 +27,7 @@ int main(void) {
         return 1;
     }
 
-    const char *expected = "artifacts/c_runner_cli_test.json";
+    const char *expected = "artifacts/c_runner_cli_test_specimen.json";
     const char *resolved = probe_cli_output_path(&cli);
     if (resolved == NULL || strcmp(resolved, expected) != 0) {
         fprintf(stderr, "expected output path '%s' but saw '%s'\n", expected, resolved);

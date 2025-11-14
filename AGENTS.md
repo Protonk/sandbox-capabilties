@@ -2,6 +2,8 @@
 
 This repo maps sandbox behaviors into named "capabilities" that are backed by self-contained probe specimens. Everything is orchestrated through `make` so agents can run the full suite with a single command and capture the results as JSON artifacts.
 
+Use this document as the operational playbook—commands, directory maps, and workflows live here. The top-level `README.md` focuses on philosophy, context, and system architecture.
+
 ## Layout
 - `Makefile` – recursively discovers every probe under `probes/`, derives a stable probe ID from the path (remove `probes/`, strip the extension, replace `/` with `__`), and emits `artifacts/<probe-id>.json`.
 - `probes/_runner.py`, `_runner_c.{c,h}`, `_runner_r.R` – shared helpers that keep the CLI/JSON contract identical across Python, C, and base R.

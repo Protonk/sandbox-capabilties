@@ -20,7 +20,7 @@ The philosophy described above shows up concretely via `make` targets, helper ut
 ## Quick start
 
 ```sh
-# enumerate every probe discovered under probes/*.py and probes/*.c
+# enumerate every probe discovered under probes/*.py, probes/*.c, and probes/*.R
 make list
 
 # run every probe and populate artifacts/<capability>.json
@@ -44,32 +44,39 @@ python3 probes/filesystem_tmp_write.py --output artifacts/filesystem_tmp_write.j
 [probe] filesystem_tmp_write_c
 cc -std=c11 -Wall -Wextra -Iprobes -o artifacts/.c_probes/filesystem_tmp_write_c probes/filesystem_tmp_write_c.c probes/_runner_c.c
 artifacts/.c_probes/filesystem_tmp_write_c --output artifacts/filesystem_tmp_write_c.json
+[probe] filesystem_tmp_write_r
+Rscript probes/filesystem_tmp_write_r.R --output artifacts/filesystem_tmp_write_r.json
 [probe] process_basic_spawn
 python3 probes/process_basic_spawn.py --output artifacts/process_basic_spawn.json
 ```
 
-Every probe—no matter the implementation language—obeys the same CLI contract by accepting `--output <path>` and emitting identical JSON artifacts. Python probes use the shared helpers in `_runner.py`, while native probes link against `_runner_c.{c,h}` to get a matching parser and JSON writer.
+Every probe—no matter the implementation language—obeys the same CLI contract by accepting `--output <path>` and emitting identical JSON artifacts. Python probes use the shared helpers in `_runner.py`, native probes link against `_runner_c.{c,h}`, and R probes source `_runner_r.R` to share the same parser and JSON writer.
 
 ---
 
 ## Repository map
 
-- `Makefile` – auto-discovers every `probes/*.py` and `probes/*.c` that don’t start with `_`, then dispatches to the right toolchain. Key fragment:
+- `Makefile` – auto-discovers every `probes/*.py`, `probes/*.c`, and `probes/*.R` that don’t start with `_`, then dispatches to the right toolchain. Key fragment:
 
   ```make
   PYTHON_PROBE_SCRIPTS := $(filter-out probes/_%.py,$(wildcard probes/*.py))
   C_PROBE_SOURCES := $(filter-out probes/_%.c,$(wildcard probes/*.c))
+  R_PROBE_SCRIPTS := $(filter-out probes/_%.R,$(wildcard probes/*.R))
 
   $(PYTHON_ARTIFACTS): $(ARTIFACT_DIR)/%.json: probes/%.py | $(ARTIFACT_DIR)
   	$(PYTHON) $< --output $@
 
   $(C_PROBE_BINARIES): $(C_BUILD_DIR)/%: probes/%.c probes/_runner_c.c probes/_runner_c.h | $(C_BUILD_DIR)
   	$(CC) $(CFLAGS) -Iprobes -o $@ $< probes/_runner_c.c
+
+  $(R_ARTIFACTS): $(ARTIFACT_DIR)/%.json: probes/%.R | $(ARTIFACT_DIR)
+	$(RSCRIPT) $< --output $@
   ```
 
 - `probes/_runner.py` – shared glue that handles CLI parsing, JSON serialization, artifact directories, and exit codes. Individual probes just import `build_parser`, `ProbeResult`, and `emit_result`.
 - `probes/_runner_c.{c,h}` – native runtime helpers that expose the same CLI contract and artifact writer to C probes (and their unit tests).
-- `probes/*.py` / `probes/*.c` – capability probes written in whichever language best exercises the behavior.
+- `probes/_runner_r.R` – base-R helpers that mirror the CLI/JSON contract so R probes stay tiny while integrating with the rest of the harness.
+- `probes/*.py` / `probes/*.c` / `probes/*.R` – capability probes written in whichever language best exercises the behavior.
 - `artifacts/` – output directory (ignored via `.gitignore`) where every probe writes `<capability>.json`.
 - `AGENTS.md` and `probes/AGENTS.md` – short guides tailored to repo users and probe authors respectively.
 
@@ -122,10 +129,30 @@ All probes follow the same structure: declare a capability slug, implement a tin
   }
   ```
 
+- **R probe** – source `_runner_r.R`, parse CLI arguments with `parse_args()`, and emit JSON with `emit_result()`. `probes/filesystem_tmp_write_r.R` mirrors the temporary-directory check:
+
+  ```r
+  source(file.path("probes", "_runner_r.R"))
+  CAPABILITY <- "filesystem_tmp_write_r"
+
+  exercise <- function() {
+    tmp_dir <- tempdir()
+    file_path <- file.path(tmp_dir, sprintf("%s_%d.txt", CAPABILITY, as.integer(Sys.time())))
+    tryCatch({
+      writeLines("sandbox capability probe (r)", file_path, useBytes = TRUE)
+      file.remove(file_path)
+      list(status = "supported", detail = sprintf("Temporary directory '%s' is writable via R", tmp_dir))
+    }, error = function(err) {
+      list(status = "blocked_unexpected", detail = conditionMessage(err))
+    })
+  }
+  ```
+
 Built-in probes:
 - `filesystem_root_write` – ensures privileged paths (such as `/var/root`) reject writes in sandboxes, which is treated as `blocked_expected`.
 - `filesystem_tmp_write` – Python version of the temporary-directory write check.
 - `filesystem_tmp_write_c` – the same capability executed via compiled C for environments that only authorize native binaries.
+- `filesystem_tmp_write_r` – the same capability executed via base R for sandboxes that prefer interpreter-based tooling.
 - `process_basic_spawn` – verifies `/bin/echo` can be spawned successfully, producing `supported` when child processes are allowed.
 
 Use these examples as templates when authoring new capabilities—pick whichever language exposes the behavior most directly, but keep the probe itself tiny and deterministic.
@@ -138,7 +165,7 @@ Use these examples as templates when authoring new capabilities—pick whichever
 make test
 ```
 
-This runs both the Python `unittest` suite (discovered under `tests/test_*.py`) and any native smoke tests stored under `tests/c/*.c`. Add Python tests whenever you touch `_runner.py` or the Makefile wiring, and add C tests whenever you extend `_runner_c` or other native helpers so regressions in those languages are caught early.
+This runs the Python `unittest` suite (discovered under `tests/test_*.py`), any native smoke tests stored under `tests/c/*.c`, and base-R scripts under `tests/r/*.R`. Add Python tests whenever you touch `_runner.py` or the Makefile wiring, add C tests whenever you extend `_runner_c` or other native helpers, and add R tests when updating `_runner_r` or the R-specific build plumbing so regressions across languages are caught early.
 
 ---
 
@@ -165,7 +192,7 @@ Because artifacts are standalone files, downstream tooling can diff directories 
 ## Adding a capability
 
 1. Observe an environment behavior worth tracking.
-2. Choose a short slug (snake_case) and the language that best fits the behavior. Create `probes/<slug>.py` (importing `_runner`) or `probes/<slug>.c` (including `_runner_c.h`).
+2. Choose a short slug (snake_case) and the language that best fits the behavior. Create `probes/<slug>.py` (importing `_runner`), `probes/<slug>.c` (including `_runner_c.h`), or `probes/<slug>.R` (sourcing `_runner_r.R`).
 3. Keep the probe laser-focused on one operation and explain the rationale in the `detail` string so downstream tools surface a helpful message.
 4. Run `make run PROBE=<slug>` until it behaves as expected. Then run `make probes` to ensure the whole suite still passes.
 5. Commit the new probe along with any documentation updates referencing the capability and language.

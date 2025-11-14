@@ -1,4 +1,4 @@
-# Capability Probes: A Sandbox-Aware Capability Catalog
+# SACC: Sandbox-Aware Capability Catalog
 
 This repository turns sandbox behavior into **explicit, repeatable capabilities**.  
 Each capability you care about is implemented as one or more tiny probes under `probes/`, and a shared `Makefile` handles discovery, execution, and artifact collection. The result is a small JSON catalog of “what this environment can and cannot do” that other tools can read.
